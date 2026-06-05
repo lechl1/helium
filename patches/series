@@ -307,6 +307,6 @@ helium/ui/disable-ink-ripple-effect.patch
 helium/ui/dont-antialias-rects.patch
 helium/ui/fix-windows-ui-position.patch
 
-helium/ui/experiments/zen-mode-wiring.patch
-helium/ui/experiments/zen-caption-buttons.patch
-helium/ui/experiments/zen-mode.patch
+helium/ui/layout/zen-mode-wiring.patch
+helium/ui/layout/zen-caption-buttons.patch
+helium/ui/layout/zen-mode.patch

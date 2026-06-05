@@ -696,7 +696,7 @@
    views::View* top_view = toolbar_;
  
    // Get the top of the top view in browser view coordinates.
-@@ -6108,6 +6640,55 @@ void BrowserView::OnWillChangeFocus(View
+@@ -6108,6 +6640,57 @@ void BrowserView::OnWillChangeFocus(View
  }
  void BrowserView::OnDidChangeFocus(View* focused_before, View* focused_now) {
    UpdateAccessibleNameForRootView();
@@ -729,20 +729,22 @@
 +void BrowserView::AnimationProgressed(const gfx::Animation* animation) {
 +  if (animation == &zen_top_chrome_animation_ ||
 +      animation == &zen_side_chrome_animation_) {
-+    if (animation == &zen_top_chrome_animation_ &&
-+        vertical_tab_strip_region_view_) {
++    const bool top_chrome_animation = animation == &zen_top_chrome_animation_;
++    if (top_chrome_animation && vertical_tab_strip_region_view_) {
 +      vertical_tab_strip_region_view_->UpdateInteriorMargin();
 +    }
-+    if (multi_contents_view_) {
++    if (top_chrome_animation && multi_contents_view_) {
 +      multi_contents_view_->MaybeUpdateContentsBorderAndOverlay();
 +    }
 +    InvalidateLayout();
-+    if (auto* frame_view = GetFrameView()) {
-+      frame_view->InvalidateLayout();
-+      // Fade caption buttons with the toolbar.  The toolbar still reserves
-+      // their space via exclusion areas since the buttons remain visible to
-+      // the layout system (only their rendering opacity is changed).
-+      frame_view->SetCaptionButtonsOpacity(GetTopChromeRevealRatio());
++    if (top_chrome_animation) {
++      if (auto* frame_view = GetFrameView()) {
++        frame_view->InvalidateLayout();
++        // Fade caption buttons with the toolbar.  The toolbar still reserves
++        // their space via exclusion areas since the buttons remain visible to
++        // the layout system (only their rendering opacity is changed).
++        frame_view->SetCaptionButtonsOpacity(GetTopChromeRevealRatio());
++      }
 +    }
 +  }
 +}
@@ -1175,7 +1177,7 @@
  
        // The overall width during an expand must change monotonically.
        if (vertical_tab_strip_animation.current_motion ==
-@@ -743,19 +826,39 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -743,27 +826,49 @@ BrowserViewTabbedLayoutImpl::CalculatePr
          last_vertical_tab_strip_width_ = vertical_tab_strip_width;
        }
  
@@ -1227,7 +1229,18 @@
  
        // Let the vertical tab strip animate out over the content.
        if (vertical_tab_strip_animation.current_motion) {
-@@ -773,7 +876,8 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+-        clip_content_for_animation =
++        const bool vertical_tab_strip_resize_animation =
+             vertical_tab_strip_animation.current_motion ==
+                 TabStripAnimations::kExpand ||
+             vertical_tab_strip_animation.current_motion ==
+                 TabStripAnimations::kCollapse;
++        clip_content_for_animation =
++            clip_content_for_animation || vertical_tab_strip_resize_animation;
+         unclipped_contents_region.Inset(gfx::Insets::TLBR(
+             0, VerticalTabStripRegionView::kCollapsedWidth, 0, 0));
+       } else {
+@@ -773,7 +878,8 @@ BrowserViewTabbedLayoutImpl::CalculatePr
      }
      layout.AddChild(views().vertical_tab_strip_region_view,
                      vertical_tab_strip_bounds,
@@ -1237,7 +1250,7 @@
    }
  
    // TODO(crbug.com/469425263): Ensure correct layout calculations for the
-@@ -830,7 +934,8 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -830,7 +936,8 @@ BrowserViewTabbedLayoutImpl::CalculatePr
  
      // Inset the bookmark bar horizontally by the vertical tab strip width so
      // it doesn't overlap.
@@ -1247,7 +1260,7 @@
        auto& top_container_children = top_container_layout.children;
        auto bookmarks_child = top_container_children.find(views().bookmark_bar);
        if (bookmarks_child != top_container_children.end() &&
-@@ -851,15 +956,40 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -851,15 +958,40 @@ BrowserViewTabbedLayoutImpl::CalculatePr
        if (const auto* toolbar_layout =
                top_container_layout.GetLayoutFor(views().toolbar);
            toolbar_layout && !toolbar_layout->bounds.IsEmpty()) {
@@ -1290,7 +1303,7 @@
    }
  
    if (dynamic_tab_strip) {
-@@ -867,15 +997,21 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -867,15 +999,21 @@ BrowserViewTabbedLayoutImpl::CalculatePr
  
      const int tabstrip_height =
          views().horizontal_tab_strip_region_view->GetPreferredSize().height();
@@ -1320,7 +1333,7 @@
    }
  
    // Lay out the main area background.
-@@ -1029,6 +1165,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1029,6 +1167,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
      top_container_layout.bounds =
          GetTopContainerBoundsInParent(top_container_local_bounds, params);
      params.SetTop(top_container_layout.bounds.bottom());
@@ -1332,7 +1345,7 @@
    }
  
    // Lay out infobar container.
-@@ -1062,14 +1203,21 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1062,14 +1205,21 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    // not suppress this separator or rounded-frame top attachment.
    const auto top_separator_type = GetTopSeparatorType();
    views().multi_contents_view->SetShouldShowTopSeparator(
@@ -1358,7 +1371,7 @@
      const bool include_leading_inset =
          !(is_split_outline_replacing_shadow_or_separator &&
            horizontal_layout.has_side_panel() && side_panel_leading);
-@@ -1079,8 +1227,7 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1079,8 +1229,7 @@ BrowserViewTabbedLayoutImpl::CalculatePr
  
      gfx::Insets start_contents_view_inset;
      start_contents_view_inset
@@ -1368,7 +1381,7 @@
          .set_bottom(MultiContentsView::kSplitViewContentInset)
          .set_left(include_leading_inset
                        ? MultiContentsView::kSplitViewContentInset
-@@ -1088,8 +1235,7 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1088,8 +1237,7 @@ BrowserViewTabbedLayoutImpl::CalculatePr
  
      gfx::Insets end_contents_view_inset;
      end_contents_view_inset
@@ -1378,7 +1391,7 @@
          .set_bottom(MultiContentsView::kSplitViewContentInset)
          .set_right(include_trailing_inset
                         ? MultiContentsView::kSplitViewContentInset
-@@ -1099,6 +1245,15 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1099,6 +1247,15 @@ BrowserViewTabbedLayoutImpl::CalculatePr
                                                      end_contents_view_inset);
    }
  
@@ -1394,7 +1407,7 @@
    views().multi_contents_view->SetAttachedSideChromeVisibility(
        leading_side_chrome_attached, trailing_side_chrome_attached);
  
-@@ -1207,6 +1362,8 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1207,6 +1364,8 @@ BrowserViewTabbedLayoutImpl::CalculatePr
  
      views().vertical_tab_strip_region_view->SetHasLeadingExclusionForLayout(
          has_leading_exclusion);
@@ -1403,7 +1416,7 @@
  
      const int padding =
          GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
-@@ -1245,6 +1402,8 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+@@ -1245,6 +1404,8 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
    const TabStripType tab_strip_type = GetTabStripType();
    const bool dynamic_tab_strip = IsDynamicTabStrip(tab_strip_type);
    const bool show_dynamic_tab_strip = ShowDynamicTabStrip(tab_strip_type);
@@ -1412,7 +1425,7 @@
  
    if (IsParentedTo(views().horizontal_tab_strip_region_view,
                     views().top_container)) {
-@@ -1253,12 +1412,18 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+@@ -1253,12 +1414,18 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
        const int leading_margin = GetHorizontalTabStripLeadingMargin(params);
        tabstrip_bounds = GetBoundsWithExclusion(
            params, views().horizontal_tab_strip_region_view, leading_margin);
@@ -1434,7 +1447,7 @@
    }
  
    // Lay out toolbar. If toolbar is in the top-most row, it will go into the
-@@ -1279,21 +1444,25 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+@@ -1279,21 +1446,25 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
                            params.visual_client_area.y(),
                            params.visual_client_area.width(),
                            views().toolbar->GetPreferredSize().height());
@@ -1464,7 +1477,7 @@
    }
  
    // Lay out the bookmarks bar if one is present.
-@@ -1302,9 +1471,13 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+@@ -1302,9 +1473,13 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
      const gfx::Rect bookmarks_bounds(
          params.visual_client_area.x(), params.visual_client_area.y(),
          params.visual_client_area.width(),
@@ -1481,7 +1494,7 @@
      params.SetTop(bookmarks_bounds.bottom());
    }
  
-@@ -1314,15 +1487,19 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+@@ -1314,15 +1489,19 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
    // Lay out the loading bar when present.
    if (IsParentedTo(views().loading_bar, views().top_container)) {
      gfx::Rect loading_bar_bounds;
@@ -1504,7 +1517,7 @@
    }
  
    // Maybe show the separator in the top container.
-@@ -1331,15 +1508,18 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+@@ -1331,15 +1510,18 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
      const bool show_separator =
          !suppress_top_separator &&
          top_separator_type == TopSeparatorType::kTopContainer;
@@ -1527,7 +1540,7 @@
    }
  
    return gfx::Rect(params.visual_client_area.x(), original_top,
-@@ -1347,12 +1527,68 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+@@ -1347,12 +1529,68 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
                     params.visual_client_area.y() - original_top);
  }
  
@@ -1599,7 +1612,7 @@
  
    // In immersive mode and ChromeOS touch UI mode, the top Chrome UI is
    // parented to the `top_container()` and the frame header is not visible.
-@@ -1369,7 +1605,58 @@ void BrowserViewTabbedLayoutImpl::Config
+@@ -1369,7 +1607,65 @@ void BrowserViewTabbedLayoutImpl::Config
    } else {
      background->SetPrimaryColor(CustomCornersBackground::ToolbarTheme());
    }
@@ -1630,9 +1643,15 @@
 +    if (!view) {
 +      return;
 +    }
++    const auto set_clip_path_if_changed = [](views::View* view,
++                                             const SkPath& path) {
++      if (!(view->clip_path() == path)) {
++        view->SetClipPath(path);
++      }
++    };
 +    if (view->width() <= 0 || view->height() <= 0) {
 +      if (!view->clip_path().isEmpty()) {
-+        view->SetClipPath(SkPath());
++        set_clip_path_if_changed(view, SkPath());
 +      }
 +      return;
 +    }
@@ -1643,10 +1662,11 @@
 +          round_trailing ? SkVector{r, r} : SkVector{0, 0},
 +          {0, 0},
 +          {0, 0}};
-+      view->SetClipPath(SkPath::RRect(SkRRect::MakeRectRadii(
-+          SkRect::MakeWH(view->width(), view->height()), radii)));
++      const SkPath clip_path = SkPath::RRect(SkRRect::MakeRectRadii(
++          SkRect::MakeWH(view->width(), view->height()), radii));
++      set_clip_path_if_changed(view, clip_path);
 +    } else if (!view->clip_path().isEmpty()) {
-+      view->SetClipPath(SkPath());
++      set_clip_path_if_changed(view, SkPath());
 +    }
 +  };
 +
