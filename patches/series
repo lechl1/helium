@@ -267,7 +267,6 @@ helium/ui/profile-picker-cleanup.patch
 helium/ui/disable-tab-group-editor-footer.patch
 helium/ui/profile-customization-cleanup.patch
 helium/ui/bangs-ui.patch
-helium/ui/thinner-infobar.patch
 helium/ui/reduce-text-button-height.patch
 helium/ui/pwa-toolbar.patch
 helium/ui/helium-color-mixers.patch
@@ -310,3 +309,5 @@ helium/ui/fix-windows-ui-position.patch
 helium/ui/layout/zen-mode-wiring.patch
 helium/ui/layout/zen-caption-buttons.patch
 helium/ui/layout/zen-mode.patch
+
+helium/ui/infobar.patch

@@ -1,0 +1,759 @@
+--- a/chrome/browser/ui/views/chrome_layout_provider.cc
++++ b/chrome/browser/ui/views/chrome_layout_provider.cc
+@@ -164,10 +164,10 @@ int ChromeLayoutProvider::GetDistanceMet
+       // Spec says height of button should be 36dp, vertical padding on both
+       // top and bottom should be 8dp.
+       // The new refreshed button height is 20 + (2 * 6) = 32dp.
+-      // Therefore, the total infobar height is 32dp + 2 * 12.
++      // Therefore, the total infobar height is 32dp + 2 * 6.
+       return base::FeatureList::IsEnabled(features::kInfobarRefresh)
+-                 ? 32 + 2 * 12
+-                 : 36 + 2 * 8;
++                 ? 32 + 2 * 6
++                 : 36 + 2 * 3;
+     case DISTANCE_PERMISSION_PROMPT_HORIZONTAL_ICON_LABEL_PADDING:
+       return 8;
+     case DISTANCE_RICH_HOVER_BUTTON_ICON_HORIZONTAL:
+--- a/chrome/browser/ui/views/infobars/infobar_container_view.cc
++++ b/chrome/browser/ui/views/infobars/infobar_container_view.cc
+@@ -7,11 +7,12 @@
+ #include <algorithm>
+ #include <numeric>
+ 
+-#include "cc/paint/paint_flags.h"
+-#include "cc/paint/paint_shader.h"
+-#include "chrome/browser/themes/theme_properties.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/view_ids.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/multi_contents_view.h"
++#include "chrome/browser/ui/views/helium/frame_corner_radius.h"
+ #include "chrome/browser/ui/views/infobars/infobar_view.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "ui/accessibility/ax_enums.mojom.h"
+@@ -19,72 +20,22 @@
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+-#include "ui/color/color_provider.h"
+-#include "ui/compositor/layer.h"
+-#include "ui/gfx/canvas.h"
+-#include "ui/gfx/skia_paint_util.h"
+ #include "ui/views/accessibility/view_accessibility.h"
+-#include "ui/views/bubble/bubble_border.h"
+ #include "ui/views/cascading_property.h"
+ #include "ui/views/controls/focus_ring.h"
+ #include "ui/views/widget/widget.h"
+ 
+ namespace {
+ 
+-class ContentShadow : public views::View {
+-  METADATA_HEADER(ContentShadow, views::View)
+-
+- public:
+-  ContentShadow();
+-
+- protected:
+-  // views::View:
+-  gfx::Size CalculatePreferredSize(
+-      const views::SizeBounds& available_size) const override;
+-  void OnPaint(gfx::Canvas* canvas) override;
+-  void OnThemeChanged() override;
+-};
+-
+-ContentShadow::ContentShadow() {
+-  SetPaintToLayer();
+-  layer()->SetFillsBoundsOpaquely(false);
+-}
+-
+-gfx::Size ContentShadow::CalculatePreferredSize(
+-    const views::SizeBounds& available_size) const {
+-  return gfx::Size(0, views::BubbleBorder::GetBorderAndShadowInsets().height());
+-}
+-
+-void ContentShadow::OnPaint(gfx::Canvas* canvas) {
+-  // Outdent the sides to make the shadow appear uniform in the corners.
+-  gfx::RectF container_bounds(parent()->GetLocalBounds());
+-  View::ConvertRectToTarget(parent(), this, &container_bounds);
+-  container_bounds.Inset(
+-      gfx::InsetsF::VH(0, -views::BubbleBorder::kShadowBlur));
+-
+-  views::BubbleBorder::DrawBorderAndShadow(gfx::RectFToSkRect(container_bounds),
+-                                           canvas, GetColorProvider());
+-}
+-
+-void ContentShadow::OnThemeChanged() {
+-  views::View::OnThemeChanged();
+-  // ContentShadow is a layer, it needs to be manually marked for redraw when
+-  // the theme changes.
+-  SchedulePaint();
+-}
+-
+-BEGIN_METADATA(ContentShadow)
+-END_METADATA
++constexpr int kSeparatorHeightDip = 1;
+ 
+ }  // namespace
+ 
+-constexpr int kSeparatorHeightDip = 1;
+-
+ InfoBarContainerView::InfoBarContainerView(Delegate* delegate)
+     : infobars::InfoBarContainerWithPriority(delegate),
+-      content_shadow_(new ContentShadow()) {
++      bottom_separator_anchor_(new views::View()) {
+   SetID(VIEW_ID_INFO_BAR_CONTAINER);
+-  AddChildViewRaw(content_shadow_.get());
++  AddChildViewRaw(bottom_separator_anchor_.get());
+   views::SetCascadingColorProviderColor(this, views::kCascadingBackgroundColor,
+                                         kColorToolbar);
+   SetBackground(
+@@ -104,50 +55,138 @@ bool InfoBarContainerView::IsEmpty() con
+   return GetPreferredSize().height() == 0;
+ }
+ 
++void InfoBarContainerView::SetRoundedFrameTopChromeRevealRatio(float ratio) {
++  const float clamped_ratio = std::clamp(ratio, 0.0f, 1.0f);
++  if (rounded_frame_top_chrome_reveal_ratio_ == clamped_ratio) {
++    return;
++  }
++  rounded_frame_top_chrome_reveal_ratio_ = clamped_ratio;
++  InvalidateLayout(/*avoid_propagate_during_layout=*/true);
++}
++
++void InfoBarContainerView::SetAttachedSideChromeVisibility(
++    bool leading_attached,
++    bool trailing_attached) {
++  if (leading_side_chrome_attached_ == leading_attached &&
++      trailing_side_chrome_attached_ == trailing_attached) {
++    return;
++  }
++  leading_side_chrome_attached_ = leading_attached;
++  trailing_side_chrome_attached_ = trailing_attached;
++  InvalidateLayout(/*avoid_propagate_during_layout=*/true);
++  SchedulePaint();
++}
++
++BrowserView* InfoBarContainerView::GetBrowserView() const {
++  return static_cast<BrowserView*>(delegate_);
++}
++
++bool InfoBarContainerView::ShouldUseRoundedFrame() const {
++  return GetBrowserView()->multi_contents_view()->ShouldUseRoundedFrame();
++}
++
++gfx::RoundedCornersF InfoBarContainerView::GetInfoBarRadii() const {
++  if (!ShouldUseRoundedFrame()) {
++    return gfx::RoundedCornersF();
++  }
++
++  const int generic_radius = GetGenericFrameRadius();
++  if (rounded_frame_top_chrome_reveal_ratio_ > 0.0f) {
++    return gfx::RoundedCornersF(generic_radius);
++  }
++
++  const int frame_radius = GetPaddedFrameRadius();
++  return gfx::RoundedCornersF(
++      leading_side_chrome_attached_ ? generic_radius : frame_radius,
++      trailing_side_chrome_attached_ ? generic_radius : frame_radius,
++      generic_radius, generic_radius);
++}
++
++int InfoBarContainerView::GetSideMargin(bool side_chrome_attached) const {
++  return ShouldUseRoundedFrame() && !side_chrome_attached
++             ? GetLayoutConstant(LayoutConstant::kHeliumBasePadding)
++             : 0;
++}
++
++int InfoBarContainerView::GetLeadingMargin() const {
++  return GetSideMargin(leading_side_chrome_attached_);
++}
++
++int InfoBarContainerView::GetTrailingMargin() const {
++  return GetSideMargin(trailing_side_chrome_attached_);
++}
++
++int InfoBarContainerView::GetBottomMargin() const {
++  if (!ShouldUseRoundedFrame()) {
++    return 0;
++  }
++  if (GetBrowserView()->multi_contents_view()->IsInSplitView()) {
++    return 0;
++  }
++  return GetLayoutConstant(LayoutConstant::kHeliumBasePadding);
++}
++
+ void InfoBarContainerView::Layout(PassKey) {
+-  const auto set_bounds = [this](int top, View* child) {
+-    const int height = static_cast<InfoBarView*>(child)->computed_height();
++  const bool use_rounded_frame = ShouldUseRoundedFrame();
++  SetBackground(views::CreateSolidBackground(
++      use_rounded_frame ? kColorToolbar : kColorInfoBarContentAreaSeparator));
++
++  const int leading_margin = GetLeadingMargin();
++  const int trailing_margin = GetTrailingMargin();
++  const gfx::RoundedCornersF infobar_radii = GetInfoBarRadii();
++  const int child_width =
++      std::max(0, width() - leading_margin - trailing_margin);
++  const View* const last_infobar =
++      children().size() > 1 ? *std::prev(children().end(), 2) : nullptr;
++  const auto set_bounds =
++      [this, infobar_radii, leading_margin, child_width,
++       last_infobar](int top, View* child) {
++    auto* const info_bar = static_cast<InfoBarView*>(child);
++    info_bar->SetRoundedFrameRadii(infobar_radii);
++    info_bar->SetBorderVisibility(leading_side_chrome_attached_,
++                                  trailing_side_chrome_attached_,
++                                  child == last_infobar);
++    const int height = info_bar->computed_height();
+     // Do not add separator dip if it's the first infobar. The first infobar
+     // should be flush with the top of InfoBarContainerView.
+-    int add_separator_height =
++    const int add_separator_height =
+         (child == children().front()) ? 0 : kSeparatorHeightDip;
+-    child->SetBounds(0, top + add_separator_height, width(), height);
++    child->SetBounds(leading_margin, top + add_separator_height,
++                     child_width, height);
+     return child->bounds().bottom();
+   };
+-  DCHECK_EQ(content_shadow_, children().back());
+-  const int top = std::accumulate(children().begin(),
+-                                  std::prev(children().end()), 0, set_bounds);
+-
+-  // The shadow is positioned flush with the bottom infobar, with the separator
+-  // there drawn by the shadow code (so we don't have to extend our bounds out
+-  // to be able to draw it; see comments in CalculatePreferredSize() on why the
+-  // shadow is drawn outside the container bounds).
+-  content_shadow_->SetBounds(0, top, width(),
+-                             content_shadow_->GetPreferredSize().height());
++  DCHECK_EQ(bottom_separator_anchor_, children().back());
++  const int top = std::accumulate(children().begin(), std::prev(children().end()),
++                                  0, set_bounds);
++
++  // The separator anchor stays positioned flush with the bottom infobar so the
++  // last infobar can draw an inset bottom separator without reserving extra
++  // layout height.
++  bottom_separator_anchor_->SetVisible(false);
++  bottom_separator_anchor_->SetBounds(leading_margin, top, child_width, 0);
+ }
+ 
+ gfx::Size InfoBarContainerView::CalculatePreferredSize(
+     const views::SizeBounds& available_size) const {
++  if (children().size() <= 1) {
++    return gfx::Size();
++  }
++
+   const auto enlarge_size = [this](const gfx::Size& size, const View* child) {
+     const gfx::Size child_size = child->GetPreferredSize();
+-    int add_separator_height =
++    const int add_separator_height =
+         (child == children().front()) ? 0 : kSeparatorHeightDip;
+     return gfx::Size(
+-        std::max(size.width(), child_size.width()),
++        std::max(size.width(),
++                 child_size.width() + GetLeadingMargin() +
++                     GetTrailingMargin()),
+         size.height() + child_size.height() + add_separator_height);
+   };
+-  // Don't reserve space for the bottom shadow here.  Because the shadow paints
+-  // to its own layer and this class doesn't, it can paint outside the size
+-  // computed here.  Not including the shadow bounds means the browser will
+-  // automatically lay out web content beginning below the bottom infobar
+-  // (instead of below the shadow), and clicks in the shadow region will go to
+-  // the web content instead of the infobars; both of these effects are
+-  // desirable.  On the other hand, it also means the browser doesn't know the
+-  // shadow is there and could lay out something atop it or size the window too
+-  // small for it; but these are unlikely.
+-  DCHECK_EQ(content_shadow_, children().back());
++  // Don't reserve space for the bottom separator here. It paints inset on the
++  // last infobar, so web contents should begin directly below that infobar.
++  DCHECK_EQ(bottom_separator_anchor_, children().back());
+   return std::accumulate(children().cbegin(), std::prev(children().cend()),
+-                         gfx::Size(), enlarge_size);
++                         gfx::Size(0, GetBottomMargin()), enlarge_size);
+ }
+ 
+ void InfoBarContainerView::PlatformSpecificAddInfoBar(
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -233,8 +233,12 @@ BrowserViewTabbedLayoutImpl::GetTopSepar
+     return TopSeparatorType::kTopContainer;
+   }
+ 
+-  // If the infobar is visible, the separator has to go in the top container.
++  // If the infobar is visible, the separator has to go in the top container
++  // unless rounded contents already provide the top outline.
+   if (delegate().IsInfobarVisible()) {
++    if (views().multi_contents_view->ShouldUseRoundedFrame()) {
++      return TopSeparatorType::kMultiContents;
++    }
+     return TopSeparatorType::kTopContainer;
+   }
+ 
+@@ -761,9 +765,14 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+       delegate().IsVerticalTabStripRightAligned();
+   const ZenModeLayoutState zen = GetZenModeLayoutState(
+       delegate(), tab_strip_type == TabStripType::kVertical);
++  const bool infobar_visible = delegate().IsInfobarVisible();
+   const bool suppress_top_separator =
+       horizontal_layout.has_side_panel() &&
+       horizontal_layout.force_top_container_to_top;
++  // Infobars own the top-container separator in regular layout. Side panel
++  // suppression should not hide that separator without a replacement.
++  const bool suppress_top_container_separator =
++      suppress_top_separator && !infobar_visible;
+ 
+   // Lay out horizontal tab strip region if present.
+   if (!dynamic_tab_strip &&
+@@ -930,7 +939,7 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+     const gfx::Rect top_container_local_bounds =
+         CalculateTopContainerLayoutImpl(top_container_layout,
+                                         top_container_params, needs_exclusion,
+-                                        suppress_top_separator);
++                                        suppress_top_container_separator);
+     top_container_layout.bounds = GetTopContainerBoundsInParent(
+         top_container_local_bounds, parent_params);
+ 
+@@ -1163,7 +1172,7 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+         CalculateTopContainerLayoutImpl(
+             top_container_layout,
+             params.InLocalCoordinates(params.visual_client_area),
+-            needs_exclusion, suppress_top_separator);
++            needs_exclusion, suppress_top_container_separator);
+     top_container_layout.bounds =
+         GetTopContainerBoundsInParent(top_container_local_bounds, params);
+     params.SetTop(top_container_layout.bounds.bottom());
+@@ -1174,17 +1183,53 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+     }
+   }
+ 
++  if (tab_strip_type == TabStripType::kVertical &&
++      !zen.floating_vertical_tab_strip) {
++    if (vertical_right_aligned) {
++      trailing_side_chrome_attached = true;
++    } else {
++      leading_side_chrome_attached = true;
++    }
++  }
++
++  const bool rounded_frame_with_infobar =
++      infobar_visible && views().multi_contents_view->ShouldUseRoundedFrame();
++  views().multi_contents_view->SetTopEdgeAttachedToInfobar(
++      rounded_frame_with_infobar);
++
++  // Top separator is unnecessary only when already replaced by split outline.
++  // Side panel shadow overlay is disabled in Helium, so side panel layout should
++  // not suppress this separator or rounded-frame top attachment.
++  const auto top_separator_type = GetTopSeparatorType();
++  views().multi_contents_view->SetShouldShowTopSeparator(
++      (is_split_outline_replacing_shadow_or_separator ||
++       top_separator_type == TopSeparatorType::kMultiContents) &&
++      (!zen.enabled || zen.TopChromeVisible() || rounded_frame_with_infobar));
++
+   // Lay out infobar container.
+-  const bool infobar_visible = delegate().IsInfobarVisible();
+   if (IsParentedTo(views().infobar_container, views().browser_view)) {
++    const float rounded_frame_top_chrome_reveal_ratio =
++        rounded_frame_with_infobar && zen.enabled
++            ? std::clamp(zen.top_chrome_ratio, 0.0f, 1.0f)
++            : 1.0f;
++    views().infobar_container->SetRoundedFrameTopChromeRevealRatio(
++        rounded_frame_top_chrome_reveal_ratio);
+     gfx::Rect infobar_bounds;
+     if (infobar_visible) {
++      views().infobar_container->SetAttachedSideChromeVisibility(
++          leading_side_chrome_attached, trailing_side_chrome_attached);
+       // Infobars slide down with top container reveal, but not when they're in
+       // the toolbar-height side panel shadow box. This is because they only
+       // slide down when they are visually adjacent to the toolbar/bookmarks
+       // bar.
+       const int additional_offset =
+           show_shadow_overlay ? 0 : delegate().GetExtraInfobarOffset();
++      const int top_margin =
++          rounded_frame_with_infobar && zen.enabled
++              ? ScaleExtent(GetLayoutConstant(
++                                LayoutConstant::kHeliumBasePadding),
++                            1.0f - rounded_frame_top_chrome_reveal_ratio)
++              : 0;
+       const int infobar_height =
+           views().infobar_container->GetPreferredSize().height();
+       // The content starts below the infobar, but is not affected by the
+@@ -1193,22 +1238,15 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+       // stays in place. See https://crbug.com/40278831.
+       infobar_bounds =
+           gfx::Rect(params.visual_client_area.x(),
+-                    params.visual_client_area.y() + additional_offset,
++                    params.visual_client_area.y() + additional_offset +
++                        top_margin,
+                     params.visual_client_area.width(), infobar_height);
+-      params.SetTop(params.visual_client_area.y() + infobar_height);
++      params.SetTop(params.visual_client_area.y() + top_margin +
++                    infobar_height);
+     }
+     layout.AddChild(views().infobar_container, infobar_bounds, infobar_visible);
+   }
+ 
+-  // Top separator is unnecessary only when already replaced by split outline.
+-  // Side panel shadow overlay is disabled in Helium, so side panel layout should
+-  // not suppress this separator or rounded-frame top attachment.
+-  const auto top_separator_type = GetTopSeparatorType();
+-  views().multi_contents_view->SetShouldShowTopSeparator(
+-      (is_split_outline_replacing_shadow_or_separator ||
+-       top_separator_type == TopSeparatorType::kMultiContents) &&
+-      (!zen.enabled || zen.TopChromeVisible()));
+-
+   // Updating the top, left and right insets for contents container view when
+   // in split view. This is dependent on a number of other browser states.
+   if (delegate().IsActiveTabSplit()) {
+@@ -1247,15 +1285,6 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+                                                     end_contents_view_inset);
+   }
+ 
+-  if (tab_strip_type == TabStripType::kVertical &&
+-      !zen.floating_vertical_tab_strip) {
+-    if (vertical_right_aligned) {
+-      trailing_side_chrome_attached = true;
+-    } else {
+-      leading_side_chrome_attached = true;
+-    }
+-  }
+-
+   views().multi_contents_view->SetAttachedSideChromeVisibility(
+       leading_side_chrome_attached, trailing_side_chrome_attached);
+ 
+--- a/chrome/browser/ui/views/frame/multi_contents_view.h
++++ b/chrome/browser/ui/views/frame/multi_contents_view.h
+@@ -172,9 +172,11 @@ class MultiContentsView
+   MultiContentsViewDropTargetController& drop_target_controller() const;
+ 
+   bool IsDragAndDropEnabled() const;
++  bool ShouldUseRoundedFrame() const;
+   void OnDragAndDropPrefStateChange();
+   void OnRoundedFramePrefStateChange();
+ 
++  void SetTopEdgeAttachedToInfobar(bool attached);
+   void SetShouldShowTopSeparator(bool should_show);
+   void SetSplitViewInsets(gfx::Insets start_contents_view_inset,
+                           gfx::Insets end_contents_view_inset);
+@@ -185,6 +187,18 @@ class MultiContentsView
+     min_contents_width_for_testing_ = std::make_optional(width);
+   }
+ 
++  struct AttachedChromeEdges {
++    bool top = false;
++    bool leading = false;
++    bool trailing = false;
++
++    int TopInset() const;
++    int LeadingInset() const;
++    int TrailingInset() const;
++  };
++
++  AttachedChromeEdges GetAttachedChromeEdges() const;
++
+   ContentsWebView* start_contents_view_for_testing() const {
+     return contents_container_views_[0]->contents_view();
+   }
+@@ -228,16 +242,6 @@ class MultiContentsView
+     bool trailing_side_chrome_attached = false;
+   };
+ 
+-  struct AttachedChromeEdges {
+-    bool top = false;
+-    bool leading = false;
+-    bool trailing = false;
+-
+-    int TopInset() const;
+-    int LeadingInset() const;
+-    int TrailingInset() const;
+-  };
+-
+   static constexpr int kMinWebContentsWidth = 200;
+   static constexpr int kConstrainedMinWebContentsWidth = 50;
+   static constexpr double kMinWebContentsWidthPercentage = 0.1;
+@@ -280,9 +284,6 @@ class MultiContentsView
+   // Returns 0 if not in a split view.
+   int GetMinViewWidth(gfx::Rect available_space) const;
+ 
+-  bool ShouldUseRoundedFrame() const;
+-  AttachedChromeEdges GetAttachedChromeEdges() const;
+-
+   void UpdateContentsBorderAndOverlay() const;
+ 
+   double CalculateRatioWithSnapPoints(double end_width,
+@@ -344,6 +345,7 @@ class MultiContentsView
+   PrefChangeRegistrar pref_change_registrar_;
+   bool is_drag_drop_pref_enabled_ = false;
+   bool is_rounded_frame_pref_enabled_ = false;
++  bool top_edge_attached_to_infobar_ = false;
+ 
+   // Maps a container to its current focusable children. This is needed since
+   // for split tabs, some of these webviews are part of the focus helper for the
+--- a/chrome/browser/ui/views/infobars/infobar_container_view.h
++++ b/chrome/browser/ui/views/infobars/infobar_container_view.h
+@@ -10,9 +10,12 @@
+ #include "base/memory/raw_ptr.h"
+ #include "components/infobars/core/infobar_container_with_priority.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/geometry/rounded_corners_f.h"
+ #include "ui/views/accessible_pane_view.h"
+ #include "ui/views/view_targeter_delegate.h"
+ 
++class BrowserView;
++
+ // The views-specific implementation of InfoBarContainer.
+ class InfoBarContainerView : public views::AccessiblePaneView,
+                              public infobars::InfoBarContainerWithPriority {
+@@ -26,6 +29,9 @@ class InfoBarContainerView : public view
+ 
+   // Returns true if there are no infobars.
+   bool IsEmpty() const;
++  void SetRoundedFrameTopChromeRevealRatio(float ratio);
++  void SetAttachedSideChromeVisibility(bool leading_attached,
++                                       bool trailing_attached);
+ 
+   // views::AccessiblePaneView:
+   void Layout(PassKey) override;
+@@ -40,10 +46,17 @@ class InfoBarContainerView : public view
+   void PlatformSpecificInfoBarShown(infobars::InfoBar* infobar) override;
+ 
+  private:
+-  // This view draws the shadow over the web contents below the
+-  // lowest infobar. A separate view with a layer is used so it can
+-  // draw outside the bounds of |this|.
+-  raw_ptr<views::View> content_shadow_;
++  BrowserView* GetBrowserView() const;
++  bool ShouldUseRoundedFrame() const;
++  gfx::RoundedCornersF GetInfoBarRadii() const;
++  int GetSideMargin(bool side_chrome_attached) const;
++  int GetLeadingMargin() const;
++  int GetTrailingMargin() const;
++  int GetBottomMargin() const;
++
++  // Hidden sentinel kept as the last child so layout code can separate
++  // infobar children from the bottom separator anchor.
++  raw_ptr<views::View> bottom_separator_anchor_;
+ 
+   // True when the focused view was inside this container at the moment an
+   // infobar removal started. Used to restore focus back to the infobar region
+@@ -51,6 +64,10 @@ class InfoBarContainerView : public view
+   // focus does not jump to page contents and screen reader users are made aware
+   // of the newly surfaced infobar.
+   bool restore_focus_on_next_shown_ = false;
++
++  float rounded_frame_top_chrome_reveal_ratio_ = 1.0f;
++  bool leading_side_chrome_attached_ = false;
++  bool trailing_side_chrome_attached_ = false;
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_INFOBARS_INFOBAR_CONTAINER_VIEW_H_
+--- a/chrome/browser/ui/views/infobars/infobar_view.cc
++++ b/chrome/browser/ui/views/infobars/infobar_view.cc
+@@ -34,6 +34,7 @@
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/color_palette.h"
+ #include "ui/gfx/color_utils.h"
++#include "ui/gfx/geometry/rounded_corners_f.h"
+ #include "ui/gfx/image/image.h"
+ #include "ui/gfx/paint_vector_icon.h"
+ #include "ui/gfx/text_constants.h"
+@@ -52,6 +53,7 @@
+ #include "ui/views/controls/link.h"
+ #include "ui/views/controls/menu/menu_runner.h"
+ #include "ui/views/layout/flex_layout.h"
++#include "ui/views/painter.h"
+ #include "ui/views/view_class_properties.h"
+ #include "ui/views/view_utils.h"
+ #include "ui/views/widget/widget.h"
+@@ -61,6 +63,8 @@
+ 
+ namespace {
+ const int kInfobarIconSize = 24;
++constexpr int kSideChromeBorderThickness = 1;
++
+ int GetElementSpacing() {
+   if (base::FeatureList::IsEnabled(features::kInfobarRefresh)) {
+     return ChromeLayoutProvider::Get()->GetDistanceMetric(
+@@ -242,6 +246,31 @@ InfoBarView::~InfoBarView() {
+   DCHECK(!menu_runner_.get());
+ }
+ 
++void InfoBarView::SetRoundedFrameRadii(const gfx::RoundedCornersF& radii) {
++  const bool enabled = !radii.IsEmpty();
++  if (rounded_frame_enabled_ == enabled && rounded_frame_radii_ == radii) {
++    return;
++  }
++  rounded_frame_enabled_ = enabled;
++  rounded_frame_radii_ = radii;
++  layer()->SetRoundedCornerRadius(radii);
++  UpdateBackground();
++}
++
++void InfoBarView::SetBorderVisibility(bool leading_side_chrome_attached,
++                                      bool trailing_side_chrome_attached,
++                                      bool bottom_border_visible) {
++  if (leading_side_chrome_attached_ == leading_side_chrome_attached &&
++      trailing_side_chrome_attached_ == trailing_side_chrome_attached &&
++      bottom_border_visible_ == bottom_border_visible) {
++    return;
++  }
++  leading_side_chrome_attached_ = leading_side_chrome_attached;
++  trailing_side_chrome_attached_ = trailing_side_chrome_attached;
++  bottom_border_visible_ = bottom_border_visible;
++  SchedulePaint();
++}
++
+ void InfoBarView::RecalculateLayoutBalancing() {
+   if (!base::FeatureList::IsEnabled(features::kInfobarRefresh)) {
+     return;
+@@ -304,6 +333,36 @@ void InfoBarView::Layout(PassKey) {
+   content_container_->SetBoundsRect(GetLocalBounds());
+ }
+ 
++void InfoBarView::OnPaintBorder(gfx::Canvas* canvas) {
++  views::View::OnPaintBorder(canvas);
++
++  if (rounded_frame_enabled_ ||
++      (!leading_side_chrome_attached_ && !trailing_side_chrome_attached_ &&
++       !bottom_border_visible_)) {
++    return;
++  }
++  if (width() <= 0 || height() <= 0) {
++    return;
++  }
++
++  const SkColor separator_color =
++      GetColorProvider()->GetColor(kColorToolbarContentAreaSeparator);
++  if (leading_side_chrome_attached_) {
++    canvas->FillRect(gfx::Rect(0, 0, kSideChromeBorderThickness, height()),
++                     separator_color);
++  }
++  if (trailing_side_chrome_attached_) {
++    canvas->FillRect(gfx::Rect(width() - kSideChromeBorderThickness, 0,
++                               kSideChromeBorderThickness, height()),
++                     separator_color);
++  }
++  if (bottom_border_visible_) {
++    canvas->FillRect(gfx::Rect(0, height() - kSideChromeBorderThickness,
++                               width(), kSideChromeBorderThickness),
++                     separator_color);
++  }
++}
++
+ gfx::Size InfoBarView::CalculatePreferredSize(
+     const views::SizeBounds& available_size) const {
+   if (base::FeatureList::IsEnabled(features::kInfobarRefresh)) {
+@@ -347,10 +406,10 @@ gfx::Size InfoBarView::CalculatePreferre
+ 
+ void InfoBarView::OnThemeChanged() {
+   views::View::OnThemeChanged();
++  UpdateBackground();
++
+   const auto* cp = GetColorProvider();
+   const SkColor background_theme_color = cp->GetColor(kColorInfoBarBackground);
+-  SetBackground(views::CreateSolidBackground(background_theme_color));
+-
+   const SkColor text_color = cp->GetColor(kColorInfoBarForeground);
+   for (views::View* child : content_container_->children()) {
+     auto* label = views::AsViewClass<views::Label>(child);
+@@ -372,6 +431,21 @@ void InfoBarView::OnThemeChanged() {
+   }
+ }
+ 
++void InfoBarView::UpdateBackground() {
++  const auto* cp = GetColorProvider();
++  const SkColor background_theme_color = cp->GetColor(kColorInfoBarBackground);
++  if (!rounded_frame_enabled_) {
++    SetBackground(views::CreateSolidBackground(background_theme_color));
++    return;
++  }
++  SetBackground(views::CreateBackgroundFromPainter(
++      views::Painter::CreateRoundRectWith1PxBorderPainter(
++          background_theme_color,
++          cp->GetColor(kColorToolbarContentAreaSeparator),
++          rounded_frame_radii_, SkBlendMode::kSrcOver,
++          /*antialias=*/true, /*should_border_scale=*/true)));
++}
++
+ void InfoBarView::OnWillChangeFocus(View* focused_before, View* focused_now) {
+   views::ExternalFocusTracker::OnWillChangeFocus(focused_before, focused_now);
+ 
+--- a/chrome/browser/ui/views/infobars/infobar_view.h
++++ b/chrome/browser/ui/views/infobars/infobar_view.h
+@@ -18,6 +18,7 @@
+ #include "third_party/skia/include/core/SkPath.h"
+ #include "ui/base/interaction/element_identifier.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/geometry/rounded_corners_f.h"
+ #include "ui/views/controls/button/image_button.h"
+ #include "ui/views/controls/menu/menu_types.h"
+ #include "ui/views/focus/external_focus_tracker.h"
+@@ -51,6 +52,7 @@ class InfoBarView : public infobars::Inf
+   void Layout(PassKey) override;
+   gfx::Size CalculatePreferredSize(
+       const views::SizeBounds& available_size) const override;
++  void OnPaintBorder(gfx::Canvas* canvas) override;
+   void OnThemeChanged() override;
+ 
+   // views::ExternalFocusTracker:
+@@ -58,6 +60,10 @@ class InfoBarView : public infobars::Inf
+ 
+   views::ImageView* icon() { return icon_; }
+   views::View* close_button() { return close_button_.get(); }
++  void SetRoundedFrameRadii(const gfx::RoundedCornersF& radii);
++  void SetBorderVisibility(bool leading_side_chrome_attached,
++                           bool trailing_side_chrome_attached,
++                           bool bottom_border_visible);
+ 
+  protected:
+   using Labels = std::vector<views::Label*>;
+@@ -141,6 +147,7 @@ class InfoBarView : public infobars::Inf
+   void LinkClicked(const ui::Event& event);
+ 
+   void CloseButtonPressed();
++  void UpdateBackground();
+ 
+   // The optional icon at the left edge of the InfoBar.
+   raw_ptr<views::ImageView> icon_ = nullptr;
+@@ -163,6 +170,12 @@ class InfoBarView : public infobars::Inf
+   raw_ptr<views::View> right_spacer_ = nullptr;
+   // The right side container view for flex layout.
+   raw_ptr<views::View> right_side_container_ = nullptr;
++
++  bool rounded_frame_enabled_ = false;
++  gfx::RoundedCornersF rounded_frame_radii_;
++  bool leading_side_chrome_attached_ = false;
++  bool trailing_side_chrome_attached_ = false;
++  bool bottom_border_visible_ = false;
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_INFOBARS_INFOBAR_VIEW_H_
+--- a/chrome/browser/ui/views/frame/multi_contents_view.cc
++++ b/chrome/browser/ui/views/frame/multi_contents_view.cc
+@@ -481,7 +481,9 @@ MultiContentsView::GetAttachedChromeEdge
+   const bool split_view = IsInSplitView();
+   AttachedChromeEdges edges;
+   edges.top =
+-      IsTopChromeAttached(*browser_view_, contents_separators_.should_show_top);
++      top_edge_attached_to_infobar_ ||
++      ::IsTopChromeAttached(*browser_view_,
++                            contents_separators_.should_show_top);
+   edges.leading = contents_separators_.leading_side_chrome_attached ||
+                   (split_view && start_contents_view_inset_.left() == 0);
+   edges.trailing = contents_separators_.trailing_side_chrome_attached ||
+@@ -984,6 +986,15 @@ void MultiContentsView::OnRoundedFramePr
+   InvalidateLayout();
+ }
+ 
++void MultiContentsView::SetTopEdgeAttachedToInfobar(bool attached) {
++  if (top_edge_attached_to_infobar_ == attached) {
++    return;
++  }
++  top_edge_attached_to_infobar_ = attached;
++  MaybeUpdateContentsBorderAndOverlay();
++  InvalidateLayout(/*avoid_propagate_during_layout=*/true);
++}
++
+ void MultiContentsView::SetShouldShowTopSeparator(bool should_show) {
+   if (contents_separators_.should_show_top == should_show) {
+     return;
