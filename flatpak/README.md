@@ -20,8 +20,26 @@ Chromium fork with the same host-integration needs.
 | `helium.sh` | In-sandbox launcher (runs the binary via `zypak-wrapper`) |
 | `net.imput.helium.metainfo.xml` | AppStream metadata |
 | `dconf-override.patch` | Lets dconf honour `DCONF_USER_CONFIG_DIR` |
+| `justfile` | `setup` / `build` / `install` automation |
 
 ## Build & install
+
+### With [`just`](https://github.com/casey/just) (recommended)
+
+From this `flatpak/` directory:
+
+```sh
+just setup     # install all deps: host flatpak/flatpak-builder + flatpak runtimes
+just install   # build and install into the user Flatpak installation
+just run       # launch it
+```
+
+`just setup` detects the host package manager (apt/dnf/pacman/zypper) to install
+`flatpak` and `flatpak-builder`, then adds the Flathub remote and installs the
+runtime, SDK, and Chromium base-app. Other recipes: `just build` (build without
+installing), `just lint`, `just clean`, `just uninstall`.
+
+### Manually
 
 Requires `flatpak` and `flatpak-builder`.
 
@@ -33,7 +51,7 @@ flatpak install --user flathub org.freedesktop.Platform//25.08 \
                                 org.chromium.Chromium.BaseApp//25.08
 
 # Build and install into the user installation
-flatpak-builder --user --install --force-clean build-dir flatpak/net.imput.helium.yaml
+flatpak-builder --user --install --force-clean build-dir net.imput.helium.yaml
 
 # Run
 flatpak run net.imput.helium

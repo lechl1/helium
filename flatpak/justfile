@@ -1,0 +1,96 @@
+# Helium Flatpak — build automation
+#
+# Usage:
+#   just setup     install all dependencies (host tooling + flatpak runtimes)
+#   just build     build the Flatpak into the local build dir
+#   just install   build and install into the user Flatpak installation
+#   just run       launch the installed Flatpak
+
+app        := "net.imput.helium"
+manifest   := "net.imput.helium.yaml"
+builddir   := "build-dir"
+runtime    := "25.08"
+flathub    := "https://flathub.org/repo/flathub.flatpakrepo"
+
+# Prefer a host flatpak-builder; fall back to the Flathub app if absent.
+# Re-evaluated on each `just` invocation, so it picks up a builder that
+# `just setup` installed in a prior invocation.
+builder    := `command -v flatpak-builder >/dev/null 2>&1 && echo flatpak-builder || echo "flatpak run org.flatpak.Builder"`
+
+# Show available recipes
+default:
+    @just --list
+
+# Install all dependencies (host flatpak/flatpak-builder + flatpak runtimes)
+setup: _host-deps _flatpak-deps
+    @echo "Setup complete. Next: just build (or just install)."
+
+# Install flatpak and flatpak-builder using the host package manager.
+_host-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v flatpak >/dev/null 2>&1 && command -v flatpak-builder >/dev/null 2>&1; then
+        echo "==> flatpak and flatpak-builder already installed; skipping host deps."
+        exit 0
+    fi
+    # Some distros ship flatpak-builder as a Flatpak app instead of a system
+    # package; that path is handled by _flatpak-deps as a fallback.
+    sudo=""
+    [ "$(id -u)" -ne 0 ] && sudo="sudo"
+    source /etc/os-release 2>/dev/null || true
+    echo "==> Installing flatpak + flatpak-builder for distro: ${ID:-unknown}"
+    case "${ID:-} ${ID_LIKE:-}" in
+        *debian*|*ubuntu*)
+            $sudo apt-get update
+            $sudo apt-get install -y flatpak flatpak-builder ;;
+        *fedora*|*rhel*|*centos*)
+            $sudo dnf install -y flatpak flatpak-builder ;;
+        *arch*)
+            $sudo pacman -S --needed --noconfirm flatpak flatpak-builder ;;
+        *suse*|*opensuse*)
+            $sudo zypper install -y flatpak flatpak-builder ;;
+        *)
+            echo "!! Unrecognized distro. Install 'flatpak' and 'flatpak-builder' manually," >&2
+            echo "!! then re-run 'just setup'." >&2
+            exit 1 ;;
+    esac
+
+# Add Flathub (user) and install the runtime, SDK, and Chromium base-app.
+_flatpak-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flatpak remote-add --if-not-exists --user flathub "{{flathub}}"
+    flatpak install --user --assumeyes --noninteractive flathub \
+        org.freedesktop.Platform//{{runtime}} \
+        org.freedesktop.Sdk//{{runtime}} \
+        org.chromium.Chromium.BaseApp//{{runtime}}
+    # Fallback: if flatpak-builder isn't a host package, get it from Flathub.
+    if ! command -v flatpak-builder >/dev/null 2>&1; then
+        echo "==> Installing org.flatpak.Builder from Flathub."
+        flatpak install --user --assumeyes --noninteractive flathub org.flatpak.Builder
+    fi
+
+# Build the Flatpak into {{builddir}} (no install).
+build:
+    {{builder}} --user --force-clean {{builddir}} {{manifest}}
+
+# Build and install into the user Flatpak installation.
+install:
+    {{builder}} --user --install --force-clean {{builddir}} {{manifest}}
+    @echo "Installed. Launch with: just run"
+
+# Launch the installed Flatpak.
+run *args:
+    flatpak run {{app}} {{args}}
+
+# Validate the manifest with flatpak-builder's dry run.
+lint:
+    {{builder}} --show-manifest {{manifest}} >/dev/null && echo "Manifest OK."
+
+# Remove build artifacts.
+clean:
+    rm -rf {{builddir}} .flatpak-builder
+
+# Uninstall the Flatpak from the user installation.
+uninstall:
+    flatpak uninstall --user --assumeyes {{app}}
